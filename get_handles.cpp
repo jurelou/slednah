@@ -1,3 +1,4 @@
+#include <cstring>
 #include <memory>
 #include <iostream>
 #include <stdio.h>
@@ -157,31 +158,12 @@ void psTree()
 
 }
 
-void listHandles()
-{
-    printf("bite");
-    // ZwQuerySystemInformation fnZwQuerySystemInformation = NULL;    // fnZwQuerySystemInformation = (ZwQuerySystemInformation)GetProcAddress(GetModuleHandleA("ntdll"), "ZwQuerySystemInformation");
-    // fnZwQuerySystemInformation = (ZwQuerySystemInformation)GetProcAddress(GetModuleHandleA("ntdll"), "NtQuerySystemInformation");      
-    // auto ZwQuerySystemInformation = GetProcAddress(GetModuleHandleA("ntdll"), "ZwQuerySystemInformation");
-    // PVOID pSysInfoBuffer = NULL;
-    // ULONG cbAllocated = 1024 * 1024;
 
-    // if (ZwQuerySystemInformation == nullptr) {
-    //     std::cout << "Unable to find ZwQuerySystemInformation" << GetLastError() << std::endl;
-    // }
-
-    // ZwQuerySystemInformation(16, pSysInfoBuffer, cbAllocated, NULL);
-
-    
-}
-
-void GetFileNameFromHandle(HANDLE *handle)
+BOOL GetFileNameFromHandle(HANDLE handle, TCHAR *pszFilename)
 {
     // source: https://learn.microsoft.com/en-us/windows/win32/memory/obtaining-a-file-name-from-a-file-handle
-    BOOL bSuccess = FALSE;
-    TCHAR pszFilename[MAX_PATH+1];
     HANDLE hFileMap;
-
+    // TCHAR pszFilename[MAX_PATH + 1];
     // Get the file size.
     DWORD dwFileSizeHi = 0;
     DWORD dwFileSizeLo = GetFileSize(&handle, &dwFileSizeHi); 
@@ -189,91 +171,87 @@ void GetFileNameFromHandle(HANDLE *handle)
     if( dwFileSizeLo == 0 && dwFileSizeHi == 0 )
     {
         std::cout << "Cannot map a file with a length of zero." << std::endl;
-        return;
+        return FALSE;
     }
 
   // Create a file mapping object.
-    hFileMap = CreateFileMapping(&handle, 
+    hFileMap = CreateFileMapping(handle, 
                     NULL,
                     PAGE_READONLY,
                     0, 
                     1,
                     NULL);
-    if (hFileMap) 
-    {
+    if (!hFileMap)
+        return FALSE;
         // Create a file mapping to get the file name.
-        void* pMem = MapViewOfFile(hFileMap, FILE_MAP_READ, 0, 0, 1);
+    void* pMem = MapViewOfFile(hFileMap, FILE_MAP_READ, 0, 0, 1);
+    if (!pMem)
+    {
+        CloseHandle(hFileMap);
+        return FALSE;
+    }
 
-        if (pMem) 
+    if (!GetMappedFileName(GetCurrentProcess(), 
+        pMem, 
+        pszFilename,
+        MAX_PATH))
+    {
+        UnmapViewOfFile(pMem);
+        CloseHandle(hFileMap);
+        return FALSE;
+    }
+    // Translate path with device name to drive letters.
+    TCHAR szTemp[BUFSIZE];
+    szTemp[0] = '\0';
+
+    if (GetLogicalDriveStrings(BUFSIZE-1, szTemp)) 
+    {
+        TCHAR szName[MAX_PATH];
+        TCHAR szDrive[3] = TEXT(" :");
+        BOOL bFound = FALSE;
+        TCHAR* p = szTemp;
+
+        do 
         {
-        if (GetMappedFileName (GetCurrentProcess(), 
-                                pMem, 
-                                pszFilename,
-                                MAX_PATH)) 
-        {
+            // Copy the drive letter to the template string
+            *szDrive = *p;
 
-            // Translate path with device name to drive letters.
-            TCHAR szTemp[BUFSIZE];
-            szTemp[0] = '\0';
-
-            if (GetLogicalDriveStrings(BUFSIZE-1, szTemp)) 
+            // Look up each device name
+            if (QueryDosDevice(szDrive, szName, MAX_PATH))
             {
-            TCHAR szName[MAX_PATH];
-            TCHAR szDrive[3] = TEXT(" :");
-            BOOL bFound = FALSE;
-            TCHAR* p = szTemp;
-
-            do 
-            {
-                // Copy the drive letter to the template string
-                *szDrive = *p;
-
-                // Look up each device name
-                if (QueryDosDevice(szDrive, szName, MAX_PATH))
-                {
                 size_t uNameLen = _tcslen(szName);
 
                 if (uNameLen < MAX_PATH) 
                 {
                     bFound = _tcsnicmp(pszFilename, szName, uNameLen) == 0
-                            && *(pszFilename + uNameLen) == _T('\\');
+                        && *(pszFilename + uNameLen) == _T('\\');
 
                     if (bFound) 
                     {
-                    // Reconstruct pszFilename using szTempFile
-                    // Replace device path with DOS path
-                    TCHAR szTempFile[MAX_PATH];
-                    StringCchPrintf(szTempFile,
-                                MAX_PATH,
-                                TEXT("%s%s"),
-                                szDrive,
-                                pszFilename+uNameLen);
-                    StringCchCopyN(pszFilename, MAX_PATH+1, szTempFile, _tcslen(szTempFile));
+                        // Reconstruct pszFilename using szTempFile
+                        // Replace device path with DOS path
+                        TCHAR szTempFile[MAX_PATH];
+                        StringCchPrintf(szTempFile,
+                                    MAX_PATH,
+                                    TEXT("%s%s"),
+                                    szDrive,
+                                    pszFilename+uNameLen);
+                        StringCchCopyN(pszFilename, MAX_PATH+1, szTempFile, _tcslen(szTempFile));
                     }
                 }
-                }
-
-                // Go to the next NULL character.
-                while (*p++);
-            } while (!bFound && *p); // end of string
             }
-        }
-        bSuccess = TRUE;
-        UnmapViewOfFile(pMem);
-        }
-        CloseHandle(hFileMap);
+            // Go to the next NULL character.
+            while (*p++);
+        } while (!bFound && *p); // end of string
     }
-    // if (!fileHandle)
-    //     return
-
-    // std::cout << handle << " - " << MAX_PATH << std::endl;
-
-    
+    UnmapViewOfFile(pMem);
+    CloseHandle(hFileMap);
+    return TRUE;
 }
 
 int main(/*int ac, char **av*/)
 {
-	auto NtQuerySystemInformation = reinterpret_cast<_NtQuerySystemInformation >(GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQuerySystemInformation"));
+    auto NtQuerySystemInformation = reinterpret_cast<_NtQuerySystemInformation >(GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQuerySystemInformation"));
 	auto NtDuplicateObject = reinterpret_cast<_NtDuplicateObject >(GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtDuplicateObject"));
 	auto NtQueryObject = reinterpret_cast<_NtQueryObject >(GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQueryObject"));
 
@@ -299,10 +277,8 @@ int main(/*int ac, char **av*/)
     TODO: c'est un peut naze. comment faire mieux????
     . */
 	while ((status = NtQuerySystemInformation(SystemHandleInformation, handleInfo, handleInfoSize, NULL)) == STATUS_INFO_LENGTH_MISMATCH)
-    {
 		handleInfo = (PSYSTEM_HANDLE_INFORMATION)realloc(handleInfo, handleInfoSize *= 2);
-        std::cout << "Had to realoc ...." << std::endl;
-    }
+
     if (!NT_SUCCESS(status))
     {
         std::cout << "NtQuerySystemInformation failed" << std::endl;
@@ -314,6 +290,7 @@ int main(/*int ac, char **av*/)
         SYSTEM_HANDLE_TABLE_ENTRY_INFO handle = handleInfo->Handles[i];
         HANDLE processDupHandle = NULL;
         PPUBLIC_OBJECT_TYPE_INFORMATION objectTypeInfo;
+
         /* Ouvre un handle associé au PID du handle */
 		if (!(processHandle = OpenProcess(PROCESS_DUP_HANDLE, FALSE, handle.UniqueProcessId)))
         {
@@ -357,8 +334,13 @@ int main(/*int ac, char **av*/)
         // Pour chaque type d'objet, on récupère les valeurs
         if (wcscmp(objectTypeInfo->TypeName.Buffer, L"File") == 0 )
         {
+        //    WCHAR* filename = new WCHAR[MAX_PATH]();
+           TCHAR filename[MAX_PATH + 1];
             // std::wcout << "FILE: " << objectTypeInfo->TypeName.Buffer << std::endl;
-            GetFileNameFromHandle(&processDupHandle);
+            if (GetFileNameFromHandle(processDupHandle, filename))
+            {
+                std::cout << "FILE: " << handle.UniqueProcessId << " - "<< filename << std::endl;
+            }
         }
         else
         {
