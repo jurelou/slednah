@@ -5,12 +5,13 @@
 #include <windows.h>
 #include <ntdef.h>
 #include <tchar.h>
-#include <strsafe.h>
 #include <psapi.h>
 
 #define SystemHandleInformation 16
-// https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ne-ntifs-_object_information_class
+// http://undocumented.ntinternals.net/index.html?page=UserMode%2FUndocumented%20Functions%2FNT%20Objects%2FType%20independed%2FOBJECT_NAME_INFORMATION.html
+#define ObjectNameInformation 1
 #define ObjectTypeInformation 2
+
 #define STATUS_INFO_LENGTH_MISMATCH 0xc0000004
 #define BUFSIZE 512
 
@@ -159,11 +160,12 @@ void psTree()
 }
 
 
-BOOL GetFileNameFromHandle(HANDLE handle, TCHAR *pszFilename)
+BOOL GetFileNameFromHandle(HANDLE handle, std::string &filename)
 {
     // source: https://learn.microsoft.com/en-us/windows/win32/memory/obtaining-a-file-name-from-a-file-handle
     HANDLE hFileMap;
-    // TCHAR pszFilename[MAX_PATH + 1];
+    TCHAR pszFilename[MAX_PATH + 1];
+
     // Get the file size.
     DWORD dwFileSizeHi = 0;
     DWORD dwFileSizeLo = GetFileSize(&handle, &dwFileSizeHi); 
@@ -228,15 +230,8 @@ BOOL GetFileNameFromHandle(HANDLE handle, TCHAR *pszFilename)
 
                     if (bFound) 
                     {
-                        // Reconstruct pszFilename using szTempFile
-                        // Replace device path with DOS path
-                        TCHAR szTempFile[MAX_PATH];
-                        StringCchPrintf(szTempFile,
-                                    MAX_PATH,
-                                    TEXT("%s%s"),
-                                    szDrive,
-                                    pszFilename+uNameLen);
-                        StringCchCopyN(pszFilename, MAX_PATH+1, szTempFile, _tcslen(szTempFile));
+                        filename = szDrive;
+                        filename.append(pszFilename + uNameLen);
                     }
                 }
             }
@@ -274,7 +269,6 @@ int main(/*int ac, char **av*/)
 	
     /* NtQuerySystemInformation ne donne pas la taille du buffer, donc on multiplie le buffer par 2 en boucle ...
     l'idée vient de: https://www.ired.team/miscellaneous-reversing-forensics/windows-kernel-internals/get-all-open-handles-and-kernel-object-address-from-userland#code    
-    TODO: c'est un peut naze. comment faire mieux????
     . */
 	while ((status = NtQuerySystemInformation(SystemHandleInformation, handleInfo, handleInfoSize, NULL)) == STATUS_INFO_LENGTH_MISMATCH)
 		handleInfo = (PSYSTEM_HANDLE_INFORMATION)realloc(handleInfo, handleInfoSize *= 2);
@@ -287,10 +281,12 @@ int main(/*int ac, char **av*/)
     // Boucle sur les handles du système
     for (i = 0; i < handleInfo->NumberOfHandles; i++)
     {
-        SYSTEM_HANDLE_TABLE_ENTRY_INFO handle = handleInfo->Handles[i];
-        HANDLE processDupHandle = NULL;
+        SYSTEM_HANDLE_TABLE_ENTRY_INFO  handle = handleInfo->Handles[i];
         PPUBLIC_OBJECT_TYPE_INFORMATION objectTypeInfo;
-
+        UNICODE_STRING  objectName;
+        HANDLE  processDupHandle = NULL;
+        PVOID   objectNameInfo = NULL;
+        ULONG   returnLength;
         /* Ouvre un handle associé au PID du handle */
 		if (!(processHandle = OpenProcess(PROCESS_DUP_HANDLE, FALSE, handle.UniqueProcessId)))
         {
@@ -334,18 +330,52 @@ int main(/*int ac, char **av*/)
         // Pour chaque type d'objet, on récupère les valeurs
         if (wcscmp(objectTypeInfo->TypeName.Buffer, L"File") == 0 )
         {
-        //    WCHAR* filename = new WCHAR[MAX_PATH]();
-           TCHAR filename[MAX_PATH + 1];
+        // Récupération du nom de fichier
+           std::string filename;
             // std::wcout << "FILE: " << objectTypeInfo->TypeName.Buffer << std::endl;
             if (GetFileNameFromHandle(processDupHandle, filename))
             {
-                std::cout << "FILE: " << handle.UniqueProcessId << " - "<< filename << std::endl;
+                // std::cout << "FILE: " << handle.UniqueProcessId << " - "<< filename << std::endl;
             }
         }
         else
         {
         // std::wcout << handle.UniqueProcessId << " -> " << objectTypeInfo->TypeName.Buffer << std::endl;
-
+            if((objectNameInfo = malloc(0x1000)) == NULL)
+            {
+			    free(objectTypeInfo);
+                CloseHandle(processHandle);
+                CloseHandle(processDupHandle);
+                continue;
+            }
+            if (!NT_SUCCESS(NtQueryObject(processDupHandle, ObjectNameInformation, objectNameInfo, 0x1000, &returnLength)))
+            {
+                // NtQuery failed, surement à cause du manque de buffer, donc on réaloue
+                if ((objectNameInfo = realloc(objectNameInfo, returnLength)) == NULL)
+                {
+                    free(objectTypeInfo);
+                    CloseHandle(processHandle);
+                    CloseHandle(processDupHandle);
+                    continue;
+                }
+                // Là ça fail vraiment, on skip
+                if (!NT_SUCCESS(NtQueryObject(processDupHandle, ObjectNameInformation, objectNameInfo, returnLength, NULL)))
+                {
+                    free(objectTypeInfo);
+                    CloseHandle(processHandle);
+                    CloseHandle(processDupHandle);
+                    continue;
+                }
+            }
+            // Cast le buffer en string unicode
+            objectName = *(PUNICODE_STRING)objectNameInfo;
+            if (objectName.Length)
+            {
+                std::wcout << handle.UniqueProcessId << " - " << objectTypeInfo->TypeName.Buffer << " - " << objectName.Buffer <<std::endl;
+            }
+            free(objectTypeInfo);
+            CloseHandle(processHandle);
+            CloseHandle(processDupHandle);
         }
 
     }
