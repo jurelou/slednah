@@ -1,21 +1,23 @@
 CC 		=	g++
 
-CFLAGS 	=	-W -Wall
+CFLAGS 	=	-O2 -Wall -Wextra -Wpedantic
+ 
+# SECFLAGS = -fstack-protector-strong -fstack-clash-protection -fPIE
 
 CLINK	=	-lpsapi
 
 NAME 	=	slednah
 
-SRCS	=	get_handles.cpp
+SRCS_UNSAFE	=	get_handles_unsafe.cpp
 
-OBJS	=	$(SRCS:.c=.o)
+OBJS_UNSAFE	=	$(SRCS_UNSAFE:.c=.o)
 
 SRCS_SAFE	= get_handles_safe.cpp
 
 OBJS_SAFE	=	$(SRCS_SAFE:.c=.o)
 
-all:		$(OBJS)
-			$(CC) $(CFLAGS) $(OBJS) -o $(NAME) $(CLINK)
-
-safe:		$(OBJS_SAFE)
+all:		$(OBJS_SAFE)
 			$(CC) $(CFLAGS) $(OBJS_SAFE) -o $(NAME) $(CLINK)
+
+unsafe:		$(OBJS_UNSAFE)
+			$(CC) $(CFLAGS) $(OBJS_UNSAFE) -o $(NAME) $(CLINK)

@@ -2,15 +2,8 @@
 
 ## Usage
 
-- Unsafe version:
-
 ```
 make ; .\slednah.exe
-```
-
-- Safe version: (work in progress)
-```
-make safe ; .\slednah.exe
 ```
 
 # TODO
