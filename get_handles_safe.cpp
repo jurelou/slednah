@@ -7,7 +7,7 @@
 #include <psapi.h>
 
 #include <ntdef.h>
-// #include <tchar.h>
+#include <tchar.h>
 
 #define SystemHandleInformation 16
 // http://undocumented.ntinternals.net/index.html?page=UserMode%2FUndocumented%20Functions%2FNT%20Objects%2FType%20independed%2FOBJECT_NAME_INFORMATION.html
@@ -69,6 +69,92 @@ typedef NTSTATUS(NTAPI *_NtQueryObject)(
 	ULONG ObjectInformationLength,
 	PULONG ReturnLength
 );
+
+BOOL getFilenameObject(HANDLE handle, std::string &filename)
+{
+    // source: https://learn.microsoft.com/en-us/windows/win32/memory/obtaining-a-file-name-from-a-file-handle
+    void    *pMem;
+    HANDLE  hFileMap;
+    TCHAR   pszFilename[MAX_PATH + 1];
+    DWORD   dwFileSizeHi = 0;
+    DWORD   dwFileSizeLo = GetFileSize(&handle, &dwFileSizeHi); 
+
+    if( dwFileSizeLo == 0 && dwFileSizeHi == 0 )
+    {
+        std::cout << "Cannot map a file with a length of zero." << std::endl;
+        return FALSE;
+    }
+
+    // Create a file mapping object.
+    hFileMap = CreateFileMapping(handle, 
+                    NULL,
+                    PAGE_READONLY,
+                    0, 
+                    1,
+                    NULL);
+    if (!hFileMap)
+        return FALSE;
+    
+    // Create a file mapping to get the file name.
+    if (!(pMem = MapViewOfFile(hFileMap, FILE_MAP_READ, 0, 0, 1)))
+    {
+        CloseHandle(hFileMap);
+        return FALSE;
+    }
+
+    if (!GetMappedFileName(GetCurrentProcess(), 
+        pMem, 
+        pszFilename,
+        MAX_PATH))
+    {
+        UnmapViewOfFile(pMem);
+        CloseHandle(hFileMap);
+        return FALSE;
+    }
+    // Translate path with device name to drive letters.
+    TCHAR szTemp[BUFF_SIZE];
+    szTemp[0] = '\0';
+
+    if (GetLogicalDriveStrings(BUFF_SIZE - 1, szTemp)) 
+    {
+        TCHAR szName[MAX_PATH];
+        TCHAR szDrive[3] = TEXT(" :");
+        BOOL bFound = FALSE;
+        TCHAR *p = szTemp;
+        do 
+        {
+            // Copy the drive letter to the template string
+            *szDrive = *p;
+
+            // Look up each device name
+            if (QueryDosDevice(szDrive, szName, MAX_PATH))
+            {
+                size_t uNameLen = _tcslen(szName);
+
+                if (uNameLen < MAX_PATH) 
+                {
+                    bFound = _tcsnicmp(pszFilename, szName, uNameLen) == 0
+                        && *(pszFilename + uNameLen) == _T('\\');
+
+                    if (bFound) 
+                    {
+                        filename = szDrive;
+                        filename.append(pszFilename + uNameLen);
+                    }
+                }
+            }
+            // Go to the next NULL character.
+            while (*p++);
+        } while (!bFound && *p); // end of string
+    }
+    else
+    {
+        filename = pszFilename;
+    }
+    UnmapViewOfFile(pMem);
+    CloseHandle(hFileMap);
+    return TRUE;
+}
 
 
 BOOL getObjectName(const _NtQueryObject &NtQueryObject, const HANDLE &processDupHandle, UNICODE_STRING &objectName)
@@ -149,9 +235,17 @@ BOOL getHandleInfo(
 		CloseHandle(processHandle);
 		return FALSE;
     }
-    // std::wcout <<"-> " << objectTypeInfo->TypeName.Buffer << std::endl;
+
     if (wcscmp(objectTypeInfo->TypeName.Buffer, L"File") == 0 )
     {
+        // si c'est un fichier, on récupère le chemin complet
+        std::string filename;
+
+        if (getFilenameObject(processDupHandle, filename))
+        {
+            // std::cout << filename << std::endl;
+        }
+        
 
     }
     else if (getObjectName(NtQueryObject, processDupHandle, objectName))
