@@ -1,6 +1,6 @@
 CC 		=	g++
 
-# CFLAGS 	=	-W -Wall
+CFLAGS 	=	-W -Wall
 
 CLINK	=	-lpsapi
 
