@@ -1,3 +1,20 @@
+# Get windows handles
+
+## Usage
+
+- Unsafe version:
+
+```
+make ; .\slednah.exe
+```
+
+- Safe version: (work in progress)
+```
+make safe ; .\slednah.exe
+```
+
+# TODO
+
 - SeDebugPrivilege
 - NtQueryObject timeout (mettre dans un thread avec futures qui timeout au bout d'1 seconde)
 

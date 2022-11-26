@@ -4,7 +4,7 @@ CC 		=	g++
 
 CLINK	=	-lpsapi
 
-NAME 	=	toto
+NAME 	=	slednah
 
 SRCS	=	get_handles.cpp
 
