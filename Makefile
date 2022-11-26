@@ -10,7 +10,12 @@ SRCS	=	get_handles.cpp
 
 OBJS	=	$(SRCS:.c=.o)
 
-all:		$(NAME)
+SRCS_SAFE	= get_handles_safe.cpp
 
-$(NAME):	$(OBJS)
+OBJS_SAFE	=	$(SRCS_SAFE:.c=.o)
+
+all:		$(OBJS)
 			$(CC) $(CFLAGS) $(OBJS) -o $(NAME) $(CLINK)
+
+safe:		$(OBJS_SAFE)
+			$(CC) $(CFLAGS) $(OBJS_SAFE) -o $(NAME) $(CLINK)
