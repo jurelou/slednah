@@ -194,67 +194,40 @@ BOOL getObjectType(const _NtQueryObject &NtQueryObject, const HANDLE &processDup
 }
 
 BOOL getHandleInfo(
-    const SYSTEM_HANDLE_TABLE_ENTRY_INFO  &handle,
-    const _NtDuplicateObject &NtDuplicateObject,
+    const HANDLE  &handle,
     const _NtQueryObject &NtQueryObject)
 {
     UNICODE_STRING objectName;
-    HANDLE  processHandle = NULL;
-    HANDLE  processDupHandle = NULL;
-    PUBLIC_OBJECT_TYPE_INFORMATION *objectTypeInfo = new PUBLIC_OBJECT_TYPE_INFORMATION;
+    PPUBLIC_OBJECT_TYPE_INFORMATION objectTypeInfo;
 
-    /* Ouvre un handle sur le processus associé au handle */
-	if (!(processHandle = OpenProcess(PROCESS_DUP_HANDLE, FALSE, handle.UniqueProcessId)))
+	if ((objectTypeInfo = (PPUBLIC_OBJECT_TYPE_INFORMATION)malloc(0x1000)) == NULL)
     {
-        // std::cout << "Could not open handle on process: " << handle.UniqueProcessId << std::endl;
-		delete objectTypeInfo;
-        return FALSE;
-    }
-
-    // Duplique le handle afin de pouvoir récupérer les infos
-    if (!NT_SUCCESS(NtDuplicateObject(
-        processHandle,
-        (HANDLE)(intptr_t)handle.HandleValue,
-        GetCurrentProcess(),
-        &processDupHandle,
-        GENERIC_READ,
-        0,
-        0)
-    ))
-    {
-		delete objectTypeInfo;
-        CloseHandle(processDupHandle);
-        CloseHandle(processHandle);
-        return FALSE;
-    }
-    // Récupération du type d'objet
-    if (!getObjectType(NtQueryObject, processDupHandle, objectTypeInfo))
-    {
-		delete objectTypeInfo;
-		CloseHandle(processDupHandle);
-		CloseHandle(processHandle);
 		return FALSE;
     }
 
+    // Récupération du type d'objet
+    if (!getObjectType(NtQueryObject, handle, objectTypeInfo))
+    {
+		free(objectTypeInfo);
+		return FALSE;
+    }
     if (wcscmp(objectTypeInfo->TypeName.Buffer, L"File") == 0 )
     {
         // si c'est un fichier, on récupère le chemin complet
         std::string filename;
 
-        if (getFilenameObject(processDupHandle, filename))
+        if (getFilenameObject(handle, filename))
         {
-            // std::cout << filename << std::endl;
+            std::cout << "file: "<<filename << std::endl;
         }
         
-
     }
-    else if (getObjectName(NtQueryObject, processDupHandle, objectName))
+    else if (getObjectName(NtQueryObject, handle, objectName))
     {
-        std::wcout << "ELSE: " << objectName.Buffer << std::endl;
+        // std::wcout << "ELSE: " << objectName.Buffer << std::endl;
     }
-    delete objectTypeInfo;
-	CloseHandle(processDupHandle);
-	CloseHandle(processHandle);
+    free(objectTypeInfo);
+
     return TRUE;
 }
 
@@ -263,15 +236,14 @@ BOOL getSystemHandles(const _NtQuerySystemInformation &NtQuerySystemInformation,
     NTSTATUS status;
     ULONG handleInfoSize = 0x1000;
 
-    /* NtQuerySystemInformation ne donne pas la taille du buffer, donc on multiplie le buffer par 2 en boucle ...
-    l'idée vient de: https://www.ired.team/miscellaneous-reversing-forensics/windows-kernel-internals/get-all-open-handles-and-kernel-object-address-from-userland#code
-    . */
     if ((handleInfo = (PSYSTEM_HANDLE_INFORMATION)malloc(handleInfoSize)) == NULL)
     {
         std::cout << "Could not allocate memory for handleInfo" << std::endl;
         return FALSE;
     }
-
+    /* NtQuerySystemInformation ne donne pas la taille du buffer, donc on multiplie le buffer par 2 en boucle ...
+    l'idée vient de: https://www.ired.team/miscellaneous-reversing-forensics/windows-kernel-internals/get-all-open-handles-and-kernel-object-address-from-userland#code
+    . */
 	while ((ULONG)(status = NtQuerySystemInformation(SystemHandleInformation, handleInfo, handleInfoSize, NULL)) == STATUS_INFO_LENGTH_MISMATCH)
     {
 		if ((handleInfo = (PSYSTEM_HANDLE_INFORMATION)realloc(handleInfo, handleInfoSize *= 2)) == NULL)
@@ -293,6 +265,9 @@ int main(/*int ac, char **av*/)
     PSYSTEM_HANDLE_INFORMATION handleInfo;
     HMODULE ntdllModule;
     ULONG   i;
+    SYSTEM_HANDLE_TABLE_ENTRY_INFO  handle;
+    HANDLE  processHandle = NULL;
+    HANDLE  processDupHandle = NULL;
     DWORD   my_pid = GetCurrentProcessId();
 
     _NtQuerySystemInformation NtQuerySystemInformation;
@@ -329,13 +304,35 @@ int main(/*int ac, char **av*/)
     {
         if (handleInfo->Handles[i].UniqueProcessId != my_pid)
         {
-            getHandleInfo(handleInfo->Handles[i], NtDuplicateObject, NtQueryObject);
-            // std::cout << handleInfo->Handles[i].UniqueProcessId << std::endl;
+            handle = handleInfo->Handles[i];
+
+            /* Ouvre un handle associé au PID du handle */
+	    	if (!(processHandle = OpenProcess(PROCESS_DUP_HANDLE, FALSE, handle.UniqueProcessId)))
+            {
+                // std::cout << "Could not open process: " << handle.UniqueProcessId << std::endl;
+                continue;
+            }
+            // Duplique le handle afin de pouvoir récupérer les infos
+            if (!NT_SUCCESS(NtDuplicateObject(
+                    processHandle,
+                    (HANDLE)(intptr_t)handle.HandleValue,
+                    GetCurrentProcess(),
+                    &processDupHandle,
+                    GENERIC_READ,
+                    0,
+                    0)))
+            {
+                // std::cout << "Failed to duplicate handle from PID: " << handle.UniqueProcessId << std::endl;
+                CloseHandle(processHandle);
+                CloseHandle(processDupHandle);
+                continue;
+            }
+            getHandleInfo(processDupHandle, NtQueryObject);
+            CloseHandle(processDupHandle);
+            CloseHandle(processHandle);
+            
+            // std::cout << handle.UniqueProcessId << std::endl;
         }
     }
-
-    // std::cout << "good" << std::endl;
-
-
 
 }
